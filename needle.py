@@ -123,8 +123,7 @@ class Injector():
 
     def print(self, output):
         sys.stdout.flush()
-        print("\r", end = '')
-        print(''.join(dict(sorted(output.items())).values()), end = '')
+        print(''.join(dict(sorted(output.items())).values()), end = "\r")
         sys.stdout.flush()
 
     def inject(self, query):
@@ -156,4 +155,4 @@ if __name__ == '__main__':
     try:
         main()
     except KeyboardInterrupt:
-        print('[-] CTRL-C Detected')
+        print("\n" + '[-] CTRL-C Detected')
